@@ -20,6 +20,7 @@
 #include <bsoncxx/json.hpp>
 
 #include <mongocxx/client.hpp>
+#include <mongocxx/options/insert.hpp>
 #include <mongocxx/pool.hpp>
 
 #include <yaml-cpp/yaml.h>
@@ -47,14 +48,15 @@ struct Loader::PhaseConfig {
           batchSize{context["BatchSize"].to<IntegerSpec>()},
           documentExpr{context["Document"].to<DocumentGenerator>(context, id)},
           collectionOffset{numCollections * thread} {
+        size_t threads = context["Threads"].to<IntegerSpec>();
         auto& indexNodes = context["Indexes"];
         for (auto [k, indexNode] : indexNodes) {
             indexes.emplace_back(indexNode["keys"].to<DocumentGenerator>(context, id),
                                  indexNode["options"].maybe<DocumentGenerator>(context, id));
         }
-        if (thread == context["Threads"].to<int>() - 1) {
+        if (thread == threads - 1) {
             // Pick up any extra collections left over by the division
-            numCollections += context["CollectionCount"].to<uint>() % context["Threads"].to<uint>();
+            numCollections += context["CollectionCount"].to<uint>() % threads;
         }
     }
 
@@ -77,9 +79,12 @@ void genny::actor::Loader::run() {
                 auto collection = config->database[collectionName];
                 // Insert the documents
                 uint remainingInserts = config->numDocuments;
+
                 {
                     auto totalOpCtx = _totalBulkLoad.start();
                     while (remainingInserts > 0) {
+                        BOOST_LOG_TRIVIAL(info)
+                            << remainingInserts << " documents remain for " << collectionName;
                         // insert the next batch
                         int64_t numberToInsert =
                             std::min<int64_t>(config->batchSize, remainingInserts);
@@ -90,14 +95,27 @@ void genny::actor::Loader::run() {
                             docs.push_back(std::move(newDoc));
                         }
                         {
+                            static auto options = [&] {
+                                auto writeConcern = mongocxx::write_concern();
+                                writeConcern.majority(std::chrono::milliseconds{10000});
+                                /*
+                                return mongocxx::options::insert().write_concern(
+                                    std::move(writeConcern));
+                                */
+                                return mongocxx::options::insert();
+                            }();
+
                             auto individualOpCtx = _individualBulkLoad.start();
-                            auto result = collection.insert_many(std::move(docs));
+                            auto result = collection.insert_many(std::move(docs), options);
                             remainingInserts -= result->inserted_count();
                             individualOpCtx.success();
                         }
                     }
                     totalOpCtx.success();
+
+                    BOOST_LOG_TRIVIAL(info) << "Finished loading " << collectionName;
                 }
+
                 // For each index
                 for (auto&& [keys, options] : config->indexes) {
                     // Make the index
@@ -118,7 +136,6 @@ void genny::actor::Loader::run() {
                     }
                 }
             }
-            BOOST_LOG_TRIVIAL(info) << "Done with load phase. All documents loaded";
         }
     }
 }
@@ -139,7 +156,7 @@ public:
             return {};
         }
         genny::ActorVector out;
-        for (uint i = 0; i < context["Threads"].to<int>(); ++i) {
+        for (uint i = 0; i < context["Threads"].to<IntegerSpec>(); ++i) {
             out.emplace_back(std::make_unique<genny::actor::Loader>(context, i));
         }
         return out;

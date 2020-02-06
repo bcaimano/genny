@@ -15,7 +15,18 @@ Actors:
   Phases:
   - Phase: 0  # Load
     Nop: true
-  - Phase: 1  # Run
+  - Phase: 1  # Initial Stepdown
+    Repeat: 1
+    SleepAfter: 60 seconds
+    ThrowOnFailure: false
+    Operation:
+      OperationMetricsName: InitialStepdown
+      OperationName: AdminCommand
+      #OperationAwaitStepdown: true
+      OperationCommand:
+        replSetStepDown: 180 # Prevent the node from being primary for the rest of the test
+        force: true # Make sure the node actually does step down
+  - Phase: 2  # Run
     Repeat: 1
     SleepBefore: 60 seconds
     # An exception is expected because the replSetStepDown command either returns failure
@@ -23,20 +34,24 @@ Actors:
     # be caught.
     ThrowOnFailure: false
     Operation:
-      OperationMetricsName: Stepdown
+      OperationMetricsName: InterruptStepdown
       OperationName: AdminCommand
+      #OperationAwaitStepdown: true
       OperationCommand:
-        replSetStepDown: 60
+        replSetStepDown: 180 # Prevent the node from being primary for the rest of the test
+        force: true # Make sure the node actually does step down
 
 - Name: PrimaryRequiredRead
   Type: RunCommand
-  Threads: 100
+  Threads: 10
   Phases:
   - Phase: 0  # Load
     Nop: true
-  - Phase: 1  # Run
-    Duration: 180 seconds
-    GlobalRate: 1 per 1 microsecond
+  - Phase: 1  # Stepdown
+    Nop: true
+  - Phase: 2  # Run
+    Duration: 120 seconds
+    GlobalRate: 1 per 100 microsecond
     Database: test
     # We want to continue to send our find commands in any situation.
     # However, failures before replSetStepDown indicate that something was wrong with the test.
@@ -48,6 +63,8 @@ Actors:
       OperationIsQuiet: true
       OperationCommand:
         find: Collection0
+        filter:
+            t: {^RandomInt: {min: 0, max: 1000}}
         readConcern: {level: local}
         $readPreference: {mode: primary}
 
@@ -58,15 +75,17 @@ Actors:
   - Phase: 0  # Load
     Database: test
     CollectionCount: 1
-    DocumentCount: 100
+    DocumentCount: 10000
     BatchSize: 100
     Threads: 1
     Document:
-      t: {^RandomInt: {min: 0, max: 10}}
+      t: {^RandomInt: {min: 0, max: 1000}}
     Indexes:
     - keys: {t: 1}
     Repeat: 1
-  - Phase: 1  # Run
+  - Phase: 1  # Initial Stepdown
+    Nop: true
+  - Phase: 2  # Run
     Nop: true
 
 AutoRun:

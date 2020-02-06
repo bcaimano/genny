@@ -1,0 +1,55 @@
+SchemaVersion: 2018-07-01
+Owner: "@mongodb/service-architecture"
+
+Clients:
+  Default:
+    QueryOptions:
+      maxPoolSize: 1000
+      socketTimeoutMS: 5000
+      connectTimeoutMS: 5000
+Actors:
+- Name: StepdownCommand
+  Type: AdminCommand
+  Threads: 1
+  Phases:
+  - Phase: 0  # Run
+    Repeat: 1
+    SleepBefore: 120 seconds
+    # An exception is expected because the replSetStepDown command either returns failure
+    # or disconnects its client session. That said, any other failure we did not expect would still
+    # be caught.
+    ThrowOnFailure: false
+    Operation:
+      OperationMetricsName: InterruptStepdown
+      OperationName: AdminCommand
+      #OperationAwaitStepdown: true
+      OperationCommand:
+        replSetStepDown: 180 # Prevent the node from being primary for the rest of the test
+        force: true # Make sure the node actually does step down
+
+- Name: PrimaryRequiredRead
+  Type: MultiCollectionQuery
+  Threads: 8
+  Phases:
+  - Phase: 0  # Run
+    Duration: 240 seconds
+    GlobalRate: 1 per 100 microsecond
+    Database: gigatest
+    CollectionCount: 100
+    # We want to continue to send our find commands in any situation.
+    # However, failures before replSetStepDown indicate that something was wrong with the test.
+    # Ideally, post-workload analysis will show if any find failure happens before replSetStepdown.
+    ThrowOnFailure: false
+    Filter:
+      x:
+        ^RandomInt:
+          min: 1
+          max: 6500
+    ReadConcern:
+        Level: local
+
+AutoRun:
+  Requires:
+    bootstrap:
+      mongodb_setup: 
+        - replica

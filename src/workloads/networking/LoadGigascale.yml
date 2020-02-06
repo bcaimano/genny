@@ -1,0 +1,34 @@
+SchemaVersion: 2018-07-01
+Owner: "@mongodb/service-architecture"
+
+# This workload loads gigabytes of multi-page documents into a single collection
+
+Actors:
+- Name: Loader
+  Type: Loader
+  Threads: 10
+  Phases:
+  - &LoadDocuments
+    Repeat: 1
+    Threads: 10
+    Database: gigatest
+    Document: # ~ 16 KiB
+      x:
+        ^RandomInt: # 1 document with each x on average
+          min: 1
+          max: 6500
+      string0:
+        ^FastRandomString: # Fill approximately four pages
+          length: 16000
+          #Indexes:
+          #    - keys: {x: 1}
+    BatchSize: 100 # 100 * 16 KiB ~ 1.6MiB
+    DocumentCount: 6500 # 6500 * 16 KiB ~ 100 MiB
+    CollectionCount: 100 # 100 * 100 MiB ~ 10.5 GiB
+  - Nop: true
+
+AutoRun:
+  Requires:
+    bootstrap:
+      mongodb_setup:
+        - replica

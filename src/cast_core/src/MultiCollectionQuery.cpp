@@ -23,6 +23,8 @@
 
 #include <mongocxx/client.hpp>
 #include <mongocxx/pool.hpp>
+#include <mongocxx/read_preference.hpp>
+#include <mongocxx/exception/operation_exception.hpp>
 
 #include <yaml-cpp/yaml.h>
 
@@ -82,6 +84,9 @@ void MultiCollectionQuery::run() {
                 collection.read_concern(*config->readConcern);
             }
 
+            auto readPreference = mongocxx::read_preference(mongocxx::read_preference::read_mode::k_primary);
+            collection.read_preference(readPreference);
+
             // Perform a query
             auto filter = config->filterExpr();
             // BOOST_LOG_TRIVIAL(info) << "Filter is " <<  bsoncxx::to_json(filter.view());
@@ -89,15 +94,20 @@ void MultiCollectionQuery::run() {
             {
                 // Only time the actual update, not the setup of arguments
                 auto opCtx = _queryOp.start();
-                auto cursor = collection.find(std::move(filter), config->options);
-                // exhaust the cursor
-                uint count = 0;
-                for (auto&& doc : cursor) {
-                    doc.length();
-                    count++;
+                try {
+                    auto cursor = collection.find(std::move(filter), config->options);
+                    // exhaust the cursor
+                    uint count = 0;
+                    for (auto&& doc : cursor) {
+                        doc.length();
+                        count++;
+                    }
+                    opCtx.addDocuments(count);
+                    opCtx.success();
+                } catch (mongocxx::operation_exception& exception) {
+                    BOOST_LOG_TRIVIAL(info) << "Caught an error";
+                    opCtx.failure();
                 }
-                opCtx.addDocuments(count);
-                opCtx.success();
             }
         }
     }
